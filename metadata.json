@@ -1,0 +1,6 @@
+{
+  "name": "8-Bit Pixel Crawler",
+  "description": "An 8-bit endless runner game powered by Teachable Machine gesture/voice controls and real-time physics.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
