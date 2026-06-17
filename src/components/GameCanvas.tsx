@@ -346,7 +346,26 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         updateScores(0);
       },
       triggerJump: () => {
-        stateRef.current.jumpRequested = true;
+        const state = stateRef.current;
+        if (state.status === "IDLE" || state.status === "GAMEOVER") {
+          sfx.playStart();
+          state.status = "PLAYING";
+          state.score = 0;
+          state.speedMultiplier = 1.0;
+          state.obstacles = [];
+          state.particles = [];
+          state.player.y = GROUND_Y - state.player.height;
+          state.player.velocityY = 0;
+          state.player.isJumping = false;
+          state.player.isDoubleJumping = false;
+          state.player.isCrouching = false;
+          
+          setGameState("PLAYING");
+          onStatusChange("PLAYING");
+          updateScores(0);
+        } else {
+          state.jumpRequested = true;
+        }
       },
       triggerCrouch: (isPressed: boolean) => {
         stateRef.current.crouchRequested = isPressed;

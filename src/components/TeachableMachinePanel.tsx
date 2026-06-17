@@ -22,9 +22,12 @@ interface TeachableMachinePanelProps {
   onActiveStateChange: (isActive: boolean) => void;
 }
 
+// Local bundled model served from public/model/ by Vite
+const LOCAL_MODEL_URL = `${window.location.origin}/model/`;
+
 export function TeachableMachinePanel({ onAction, onActiveStateChange }: TeachableMachinePanelProps) {
   const [modelType, setModelType] = useState<TMModelType>("IMAGE");
-  const [modelUrl, setModelUrl] = useState<string>("");
+  const [modelUrl, setModelUrl] = useState<string>(LOCAL_MODEL_URL);
   const [loadingStatus, setLoadingStatus] = useState<"IDLE" | "LOADING_SCRIPTS" | "LOADING_MODEL" | "STARTING_STREAMS" | "READY" | "ERROR">("IDLE");
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.80);
@@ -48,7 +51,6 @@ export function TeachableMachinePanel({ onAction, onActiveStateChange }: Teachab
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioDataIdRef = useRef<number | null>(null);
 
-  // Script load tracking
   const [scriptsLoaded, setScriptsLoaded] = useState<{ tfjs: boolean; image: boolean; pose: boolean; speech: boolean }>({
     tfjs: false,
     image: false,
@@ -56,19 +58,36 @@ export function TeachableMachinePanel({ onAction, onActiveStateChange }: Teachab
     speech: false,
   });
 
+  const classMappingsRef = useRef(classMappings);
+  const confidenceThresholdRef = useRef(confidenceThreshold);
+  const onActionRef = useRef(onAction);
+  const lastActionRef = useRef<"JUMP" | "CROUCH" | "RELEASE" | "NONE">("NONE");
+
+  useEffect(() => { classMappingsRef.current = classMappings; }, [classMappings]);
+  useEffect(() => { confidenceThresholdRef.current = confidenceThreshold; }, [confidenceThreshold]);
+  useEffect(() => { onActionRef.current = onAction; }, [onAction]);
+
   // Dynamic script loader from CDN
   const loadCDNAsset = (url: string): Promise<void> => {
     return new Promise((resolve, reject) => {
-      const alreadyIncluded = document.querySelector(`script[src="${url}"]`);
+      const alreadyIncluded = document.querySelector(`script[src="${url}"]`) as HTMLScriptElement;
       if (alreadyIncluded) {
-        resolve();
+        if (alreadyIncluded.getAttribute("data-loaded") === "true") {
+          resolve();
+          return;
+        }
+        alreadyIncluded.addEventListener("load", () => resolve());
+        alreadyIncluded.addEventListener("error", () => reject(new Error(`Failed to load dependency CDN script: ${url}`)));
         return;
       }
       const script = document.createElement("script");
       script.src = url;
       script.async = true;
-      script.onload = () => resolve();
-      script.onerror = (err) => reject(new Error(`Failed to load dependency CDN script: ${url}`));
+      script.onload = () => {
+        script.setAttribute("data-loaded", "true");
+        resolve();
+      };
+      script.onerror = () => reject(new Error(`Failed to load dependency CDN script: ${url}`));
       document.head.appendChild(script);
     });
   };
@@ -118,6 +137,14 @@ export function TeachableMachinePanel({ onAction, onActiveStateChange }: Teachab
       }
     }
   }, [useSimulation, simulatedClasses]);
+
+  // Auto-load the local bundled model on first mount
+  useEffect(() => {
+    if (!useSimulation) {
+      handleLoadModel();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Web camera / audio stream cleaner
   const stopAllStreams = () => {
@@ -206,12 +233,25 @@ export function TeachableMachinePanel({ onAction, onActiveStateChange }: Teachab
       const labels = modelRef.current.getClassLabels ? modelRef.current.getClassLabels() : modelRef.current.labels;
       
       const defaultMappings: ModelClassMapping[] = labels.map((label: string, index: number) => {
-        // Try mapping heuristic: if names include jump or duck
+        // Map class names to game actions.
+        // Explicit emotion/keyword mappings take priority, then positional fallback.
         let action: "NONE" | "JUMP" | "CROUCH" = "NONE";
         const lLower = label.toLowerCase();
-        if (lLower.includes("jump") || lLower.includes("up") || lLower.includes("high")) {
+        if (
+          lLower.includes("happy") ||
+          lLower.includes("jump") ||
+          lLower.includes("up") ||
+          lLower.includes("high") ||
+          lLower.includes("raise")
+        ) {
           action = "JUMP";
-        } else if (lLower.includes("crouch") || lLower.includes("duck") || lLower.includes("down")) {
+        } else if (
+          lLower.includes("sad") ||
+          lLower.includes("crouch") ||
+          lLower.includes("duck") ||
+          lLower.includes("down") ||
+          lLower.includes("low")
+        ) {
           action = "CROUCH";
         } else if (index === 1 && labels.length === 3) {
           action = "JUMP";
@@ -382,8 +422,8 @@ export function TeachableMachinePanel({ onAction, onActiveStateChange }: Teachab
     let metCrouch = false;
 
     predsList.forEach((pred) => {
-      const mapping = classMappings.find((m) => m.className === pred.className);
-      if (mapping && pred.probability >= confidenceThreshold) {
+      const mapping = classMappingsRef.current.find((m) => m.className === pred.className);
+      if (mapping && pred.probability >= confidenceThresholdRef.current) {
         if (mapping.action === "JUMP") {
           metJump = true;
         } else if (mapping.action === "CROUCH") {
@@ -392,13 +432,19 @@ export function TeachableMachinePanel({ onAction, onActiveStateChange }: Teachab
       }
     });
 
+    let currentAction: "JUMP" | "CROUCH" | "RELEASE" = "RELEASE";
     if (metJump) {
-      onAction("JUMP");
+      currentAction = "JUMP";
     } else if (metCrouch) {
-      onAction("CROUCH");
-    } else {
-      // release crouch state back to idling/normal state
-      onAction("RELEASE");
+      currentAction = "CROUCH";
+    }
+
+    if (currentAction !== lastActionRef.current) {
+      onActionRef.current(currentAction);
+      lastActionRef.current = currentAction;
+    } else if (currentAction === "CROUCH") {
+      // Game canvas needs continuous crouch requests while holding
+      onActionRef.current("CROUCH");
     }
   };
 
